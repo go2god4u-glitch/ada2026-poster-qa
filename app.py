@@ -17,6 +17,7 @@
 import os
 import re
 import time
+import hashlib
 import sqlite3
 import asyncio
 import secrets
@@ -38,6 +39,10 @@ TG_API           = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # 시크릿이 비었거나 placeholder면 웹훅을 fail-closed 처리(가짜 답장 주입 차단)
 SECRET_OK = bool(WEBHOOK_SECRET) and WEBHOOK_SECRET != "change-me-please"
+
+# 텔레그램 secret_token / URL 경로는 [A-Za-z0-9_-]만 허용.
+# Render 자동생성 시크릿엔 특수문자가 섞일 수 있어, 해시(hex)로 변환해 항상 안전한 값 사용.
+TG_SECRET = hashlib.sha256((WEBHOOK_SECRET or "").encode()).hexdigest()
 
 HERE       = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "static", "index.html")
@@ -141,12 +146,12 @@ async def lifespan(app: FastAPI):
         print("[startup] [WARN] WEBHOOK_SECRET not set / placeholder - webhook disabled (fail-closed). "
               "Set a unique WEBHOOK_SECRET in production.")
     if TELEGRAM_TOKEN and BASE_URL and SECRET_OK:
-        hook = f"{BASE_URL}/tg/{WEBHOOK_SECRET}"
+        hook = f"{BASE_URL}/tg/{TG_SECRET}"
         try:
             async with httpx.AsyncClient(timeout=15) as c:
                 r = await c.post(f"{TG_API}/setWebhook", json={
                     "url": hook,
-                    "secret_token": WEBHOOK_SECRET,
+                    "secret_token": TG_SECRET,
                     "allowed_updates": ["message"],
                     "drop_pending_updates": False,
                 })
@@ -186,12 +191,12 @@ async def admin_setup(token: str):
         info["registered"] = False
         info["reason"] = "BASE_URL 또는 WEBHOOK_SECRET 미설정"
         return info
-    hook = f"{BASE_URL}/tg/{WEBHOOK_SECRET}"
+    hook = f"{BASE_URL}/tg/{TG_SECRET}"
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.post(f"{TG_API}/setWebhook", json={
                 "url": hook,
-                "secret_token": WEBHOOK_SECRET,
+                "secret_token": TG_SECRET,
                 "allowed_updates": ["message"],
             })
             info["setWebhook"] = r.json()
@@ -317,11 +322,11 @@ async def poll(session_id: str, after: int = 0):
 # ---- 텔레그램 웹훅 (발표자 답장 수신) ----------------------------
 @app.post("/tg/{secret}")
 async def telegram_webhook(secret: str, req: Request):
-    if not SECRET_OK or secret != WEBHOOK_SECRET:
+    if not SECRET_OK or secret != TG_SECRET:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     # 텔레그램이 보내는 시크릿 헤더도 확인(있으면)
     hdr = req.headers.get("x-telegram-bot-api-secret-token")
-    if hdr is not None and hdr != WEBHOOK_SECRET:
+    if hdr is not None and hdr != TG_SECRET:
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
     update = await req.json()
