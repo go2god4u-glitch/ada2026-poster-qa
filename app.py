@@ -16,6 +16,7 @@
 
 import os
 import re
+import sys
 import time
 import hashlib
 import sqlite3
@@ -23,6 +24,14 @@ import asyncio
 import secrets
 import html
 from contextlib import asynccontextmanager
+
+# Render 컨테이너 stdout이 ASCII 로케일이면 한글 print 시 UnicodeEncodeError -> 요청 크래시.
+# UTF-8 + errors=replace 로 고정해 print가 절대 터지지 않게.
+for _stream in ("stdout", "stderr"):
+    try:
+        getattr(sys, _stream).reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import httpx
 from fastapi import FastAPI, Request
@@ -164,6 +173,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+# [임시 디버그] 500 원인 추적용 - 원인 확인 후 제거 예정
+@app.exception_handler(Exception)
+async def _debug_exc(request: Request, exc: Exception):
+    import traceback
+    tb = traceback.format_exc()
+    print("[UNHANDLED]", tb)
+    return JSONResponse(
+        {"error": "internal", "detail": f"{type(exc).__name__}: {exc}"},
+        status_code=500)
 
 
 # ---- 관람객용 API ------------------------------------------------
