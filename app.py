@@ -172,6 +172,36 @@ async def healthz():
     return PlainTextResponse("ok")
 
 
+@app.get("/admin/setup")
+async def admin_setup(token: str):
+    """온디맨드 웹훅 등록 + 진단. 봇 토큰을 아는 사람만 호출 가능."""
+    if not TELEGRAM_TOKEN or token != TELEGRAM_TOKEN:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    info: dict = {
+        "base_url": BASE_URL or "(missing)",
+        "secret_ok": SECRET_OK,
+        "chat_id_set": bool(TELEGRAM_CHAT_ID),
+    }
+    if not (BASE_URL and SECRET_OK):
+        info["registered"] = False
+        info["reason"] = "BASE_URL 또는 WEBHOOK_SECRET 미설정"
+        return info
+    hook = f"{BASE_URL}/tg/{WEBHOOK_SECRET}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(f"{TG_API}/setWebhook", json={
+                "url": hook,
+                "secret_token": WEBHOOK_SECRET,
+                "allowed_updates": ["message"],
+            })
+            info["setWebhook"] = r.json()
+            info["registered"] = bool(r.json().get("ok"))
+    except Exception as e:
+        info["registered"] = False
+        info["error"] = str(e)
+    return info
+
+
 @app.post("/api/session")
 async def create_session(req: Request):
     ip = req.client.host if req.client else "?"
