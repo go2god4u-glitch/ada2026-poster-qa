@@ -232,12 +232,13 @@ async def create_session(req: Request):
         raise RuntimeError("could not allocate a unique session code")
     code = await db(_ins)
 
-    contact = f"{name} / {company}" + (f" / {email}" if email else "")
+    email_line = f"\n✉️ {html.escape(email)}" if email else ""
     await tg_send(
-        f"🆕 <b>새 문의</b>  <code>#s={code}</code>\n"
-        f"👤 {html.escape(contact)}\n"
-        f"────────────\n"
-        f"<i>이 사람의 메시지에 ‘답장(swipe-reply)’ 하면 바로 전달됩니다.</i>")
+        f"🆕 새 방문자\n"
+        f"👤 <b>{html.escape(name)}</b>\n"
+        f"🏢 {html.escape(company)}{email_line}\n"
+        f"<i>방금 채팅을 시작했어요 — 곧 질문이 옵니다.</i>\n"
+        f"<i>#s={code}</i>")
     return {"session_id": code}
 
 
@@ -275,11 +276,12 @@ async def post_message(req: Request):
     await db(_ins)
 
     # 발표자에게 전달 (세션코드를 본문에 박아 라우팅이 재시작에도 self-heal)
-    who = f"{sess['name']} / {sess['company']}"
     mid = await tg_send(
-        f"💬 <b>{html.escape(who)}</b>  <code>#s={sid}</code>\n"
-        f"{html.escape(text)}\n\n"
-        f"<i>↩︎ 이 메시지에 답장하면 전달됩니다</i>")
+        f"👤 <b>{html.escape(sess['name'])}</b> · {html.escape(sess['company'])}\n"
+        f"\n"
+        f"💬 {html.escape(text)}\n"
+        f"\n"
+        f"<i>↩️ 답하려면 이 메시지를 밀어서(swipe) 답장 · #s={sid}</i>")
     if mid is not None:
         def _map():
             _conn.execute("INSERT OR REPLACE INTO tgmap(tg_message_id,session_id) VALUES(?,?)",
