@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# SQLite database (runtime data + WAL/SHM)
+data.db
+data.db-wal
+data.db-shm
+testdb.db*
+
+# Logs
+server*.log
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment variables / secrets
+.env
+fc.db*
