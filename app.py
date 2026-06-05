@@ -44,6 +44,8 @@ WEBHOOK_SECRET   = os.environ.get("WEBHOOK_SECRET", "change-me-please")
 BASE_URL         = (os.environ.get("RENDER_EXTERNAL_URL")
                     or os.environ.get("BASE_URL", "")).rstrip("/")
 DB_PATH          = os.environ.get("DB_PATH", "data.db")
+# Google Apps Script 웹앱 URL(선택). 설정 시 모든 메시지를 Google 시트에 영구 누적.
+SHEETS_WEBHOOK_URL = os.environ.get("SHEETS_WEBHOOK_URL", "")
 TG_API           = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # 시크릿이 비었거나 placeholder면 웹훅을 fail-closed 처리(가짜 답장 주입 차단)
@@ -128,6 +130,27 @@ async def db(fn):
 
 
 # ---- 텔레그램 ----------------------------------------------------
+async def _post_sheet(row: dict):
+    """Google Apps Script 웹앱으로 한 행 전송 (실패해도 무시)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(SHEETS_WEBHOOK_URL, json=row)
+    except Exception as e:
+        print("[sheet] 로깅 실패:", e)
+
+
+def log_to_sheet(session: str, name: str, company: str, email: str, sender: str, text: str):
+    """모든 메시지를 Google 시트에 영구 누적 (비차단 - 응답 지연 없음)."""
+    if not SHEETS_WEBHOOK_URL:
+        return
+    row = {"session": session, "name": name, "company": company,
+           "email": email or "", "sender": sender, "text": text}
+    try:
+        asyncio.create_task(_post_sheet(row))
+    except RuntimeError:
+        pass  # 이벤트 루프 밖이면 생략
+
+
 async def tg_send(text: str, reply_markup=None) -> int | None:
     """발표자 채팅으로 메시지 전송. 전송된 message_id 반환."""
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
@@ -290,6 +313,9 @@ async def post_message(req: Request):
         _conn.commit()
     await db(_ins)
 
+    # Google 시트에 영구 기록 (방문자 질문)
+    log_to_sheet(sid, sess["name"], sess["company"], sess["email"], "Visitor", text)
+
     # 발표자에게 전달 (세션코드를 본문에 박아 라우팅이 재시작에도 self-heal)
     mid = await tg_send(
         f"👤 <b>{html.escape(sess['name'])}</b> · {html.escape(sess['company'])}\n"
@@ -402,4 +428,11 @@ async def telegram_webhook(secret: str, req: Request):
         _conn.commit()
     await db(_ins)
     _wake(sid)
+
+    # Google 시트에 영구 기록 (발표자 답변)
+    def _sess():
+        return _conn.execute("SELECT name,company,email FROM sessions WHERE id=?", (sid,)).fetchone()
+    sr = await db(_sess)
+    log_to_sheet(sid, sr["name"] if sr else "", sr["company"] if sr else "",
+                 sr["email"] if sr else "", "Presenter (you)", text)
     return {"ok": True}
