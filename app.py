@@ -175,17 +175,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-# [임시 디버그] 500 원인 추적용 - 원인 확인 후 제거 예정
-@app.exception_handler(Exception)
-async def _debug_exc(request: Request, exc: Exception):
-    import traceback
-    tb = traceback.format_exc()
-    print("[UNHANDLED]", tb)
-    return JSONResponse(
-        {"error": "internal", "detail": f"{type(exc).__name__}: {exc}"},
-        status_code=500)
-
-
 # ---- 관람객용 API ------------------------------------------------
 @app.get("/")
 async def index():
@@ -229,8 +218,10 @@ async def admin_setup(token: str):
 
 @app.post("/api/session")
 async def create_session(req: Request):
+    # 학회장 WiFi는 여러 명이 같은 공인IP(NAT)를 공유 -> IP당 한도는 넉넉히(분당 60).
+    # 폭주 스크립트(초당 수십)는 여전히 차단됨.
     ip = req.client.host if req.client else "?"
-    if not _rate_ok(f"sess:{ip}", limit=5, window=60):
+    if not _rate_ok(f"sess:{ip}", limit=60, window=60):
         return JSONResponse({"error": "too many requests, please wait a moment"}, status_code=429)
 
     body = await req.json()
@@ -269,10 +260,6 @@ async def create_session(req: Request):
 
 @app.post("/api/message")
 async def post_message(req: Request):
-    ip = req.client.host if req.client else "?"
-    if not _rate_ok(f"msg:{ip}", limit=20, window=60):
-        return JSONResponse({"error": "too many requests, please slow down"}, status_code=429)
-
     body = await req.json()
     sid  = (body.get("session_id") or "").strip()
     text = (body.get("text") or "").strip()[:4000]
@@ -280,6 +267,9 @@ async def post_message(req: Request):
         return JSONResponse({"error": "session_id and text required"}, status_code=400)
     if not SID_RE.match(sid):
         return JSONResponse({"error": "invalid session id"}, status_code=400)
+    # 메시지 한도는 IP가 아닌 '세션별'로 -> NAT(공유IP) 방문자끼리 서로 막지 않음.
+    if not _rate_ok(f"msg:{sid}", limit=30, window=60):
+        return JSONResponse({"error": "too many requests, please slow down"}, status_code=429)
 
     def _get():
         return _conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
